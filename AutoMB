@@ -1,0 +1,266 @@
+import os
+import time
+import requests
+import json
+import datetime
+import re
+from slackclient import SlackClient
+
+# instantiate Slack client
+slack_client = SlackClient(os.environ.get('SLACK_BOT_TOKEN'))
+# starterbot's user ID in Slack: value is assigned after the bot starts up
+awrbot_id = None
+
+# constants
+RTM_READ_DELAY = 1 # 1 second delay between reading from RTM
+EXAMPLE_COMMAND = "Help"
+MENTION_REGEX = "^<@(|[WU].+?)>(.*)"
+
+def parse_bot_commands(slack_events):
+    """
+        Parses a list of events coming from the Slack RTM API to find bot commands.
+        If a bot command is found, this function returns a tuple of command and channel.
+        If its not found, then this function returns None, None.
+    """
+    for event in slack_events:
+        if event["type"] == "message" and not "subtype" in event:
+            user_id, message = parse_direct_mention(event["text"])
+            if user_id == awrbot_id:
+                return message, event["channel"]
+    return None, None
+
+def parse_direct_mention(message_text):
+    """
+        Finds a direct mention (a mention that is at the beginning) in message text
+        and returns the user ID which was mentioned. If there is no direct mention, returns None
+    """
+    matches = re.search(MENTION_REGEX, message_text)
+    # the first group contains the username, the second group contains the remaining message
+    return (matches.group(1), matches.group(2).strip()) if matches else (None, None)
+
+def handle_command(command, channel):
+    """
+        Executes bot command if the command is known
+    """
+    # Default response is help text for the user
+    default_response = "You start with *{}*.".format(EXAMPLE_COMMAND)
+
+    # Finds and executes the given command, filling in response
+    response: None = None
+    # This is where you start to implement more commands!
+
+# Code for "List Template" command
+    if command.startswith("List Template" or "list template"):
+
+# Searching for the Templates which has the name "Template" in it
+
+        xlrurl = 'Servername/api/v1/templates?title=Template&page=0&resultsPerPage=100&depth=0'
+        xlrres = requests.get(xlrurl, auth=(' ', ' '), verify=False)
+
+#        print(xlrres.status_code)
+
+        xlrres_json = xlrres.json()
+
+#       Listing the templates if successful
+        if xlrres.status_code == 200:
+
+            listtmp_base = "Here are the Release Templates \n"
+
+            listtmp = ''
+
+            for xlrtitle in xlrres_json:
+                listtmp += xlrtitle['title'] + "\n"
+
+            response = listtmp_base + listtmp
+
+        else:
+            response = "Unable to fetch the templates"
+
+# Code for "List Release" command
+    elif command.startswith("List Releases" or "list releases"):
+
+# Searching for the Planned and Active Releases
+        xlrurl = 'Servername/api/v1/releases?page=0&resultsPerPage=100&depth=0'
+        xlrres = requests.get(xlrurl, auth=('',''), verify=False)
+
+#        print(xlrres.status_code)
+        xlrres_json = xlrres.json()
+
+# Listing the planned and active releases if fecting is succesful
+        if xlrres.status_code == 200:
+
+            listtmp_base = "Here are the Planned and Active Releases \n"
+
+            listtmp = ''
+
+            for xlrtitle in xlrres_json:
+
+# filtering out "Welcome" releases
+                if (xlrtitle['title'].find("Welcome") < 0 ):
+                    listtmp += xlrtitle['title'] + "\n"
+
+            response = listtmp_base + listtmp
+
+        else:
+            response = "Unable to fetch the Planned or Active releases"
+
+    elif command.startswith("Start" or "start"):
+# We will be getting the Template Title from the user with the Start command
+# Parse the command to get the Template Title find the Template ID and add it to the URL after which
+# you will get the release ID with which you can start the release
+
+        command_string = command
+        xlrtmplatetitle = command_string.split(' ', maxsplit=1)
+
+#        print(xlrtmplatetitle)
+
+# Fetch the template ID based on its title
+
+        xlrurl_base = 'Servername/api/v1/templates?title='
+        xlrurl_end = '&page=0&resultsPerPage=100&depth=0'
+
+        xlrurl = xlrurl_base + xlrtmplatetitle[1] + xlrurl_end
+        xlrres = requests.get(xlrurl, auth=('', ' '), verify=False)
+
+        xlrres_json = xlrres.json()
+
+        xlrtmplateid = xlrres_json[0]['id']
+
+#        print(xlrtmplateid)
+
+# Create a release based on the template ID that was provided by the user
+
+        xlrurl_base = 'Servername/api/v1/templates/'
+        xlrurl_end = '/create'
+
+        xlrurl = xlrurl_base + xlrtmplateid + xlrurl_end
+
+        reldate = datetime.datetime.now()
+
+        xlrreltitle = "Release from the Template " + xlrtmplatetitle[1] + " " + reldate.strftime("%m-%d-%y")
+
+        xlrdata = {
+            "releaseTitle": xlrreltitle,
+            "releaseVariables": {},
+            "releasePasswordVariables": {},
+            "scheduledStartDate": None,
+            "autoStart": False,
+            "scriptUsername": ' ',
+            "scriptUserPassword": ' '
+        }
+        xlrres = requests.post(xlrurl, json=xlrdata, auth=(' ', ' '), verify=False)
+
+        print(xlrres.status_code)
+        xlrtxt = xlrres.json()
+        xlrrelid = xlrtxt['id']
+
+        print(xlrrelid)
+
+        # Start release which was created from the template
+
+        xlrurl = 'Servername/api/v1/releases/' + xlrrelid + '/start'
+        xlrres = requests.post(xlrurl, auth=(' ', ' '), verify=False)
+
+        print(xlrres.status_code)
+
+        #       Check if the status code is good or was there issues in starting the release
+        if xlrres.status_code == 200:
+            response = "Release started for " + xlrreltitle
+        else:
+            response = "Error in starting the release"
+
+    elif command.startswith("Status" or "status"):
+
+        command_string = command
+        xlrreltitle = command_string.split(' ', maxsplit=1)
+        xlrreltitle_str = xlrreltitle[1].replace(' ','%20')
+
+        print(xlrreltitle_str)
+
+# Get the release ID to get the status based on the user Input "Release Title"
+        xlrurl = 'Servername/api/v1/releases/byTitle?releaseTitle=' + xlrreltitle_str
+        xlrres = requests.get(xlrurl, auth=(' ', ' '), verify=False)
+
+        print(xlrres.status_code)
+
+        xlrres_json = xlrres.json()
+
+#       Check if the status code is good or was there issues in getting the release ID
+        if xlrres.status_code == 200:
+            response_str = "The release " + xlrreltitle[1] + " is " + xlrres_json[0]["status"]
+            response = response_str
+        else:
+            response = " Error in getting the status for the release " + xlrreltitle[1]
+
+    elif command.startswith("Active Tasks"):
+
+        command_string = command
+        xlrreltitle = command_string.split(' ', maxsplit=2)
+        xlrreltitle_str = xlrreltitle[2].replace(' ','%20')
+
+        print(xlrreltitle_str)
+
+        xlrurl = 'Servername/api/v1/releases/byTitle?releaseTitle=' + xlrreltitle_str
+        xlrres = requests.get(xlrurl, auth=(' ', ' '), verify=False)
+
+        print(xlrres.status_code)
+
+        xlrres_json = xlrres.json()
+
+        xlrrelid = xlrres_json[0]['id']
+
+        print(xlrreltitle_str)
+
+        # Get the active tasks based on the user Input "Release Title"
+        xlrurl = 'Servername/api/v1/releases/' + xlrrelid +'/active-tasks'
+        xlrres = requests.get(xlrurl, auth=(' ', ' '), verify=False)
+
+        print(xlrres.status_code)
+
+        xlrres_json = xlrres.json()
+
+        listtmp = ''
+
+        for xlrtasks in xlrres_json:
+            listtmp += xlrtasks['title'] + "\n"
+
+        #       Check if the status code is good or was there issues in getting the release ID
+        if xlrres.status_code == 200:
+            response_str = "The active tasks for the release " + xlrreltitle[2] + " are : \n"
+            response = response_str + listtmp
+        else:
+            response = " Error in getting the tasks for the release " + xlrreltitle[2]
+
+    elif command.startswith("help"):
+        response = "You can use the following commands to intract with AWRBot : \n" + "List Templates \n" + "List Releases \n" + "Start <Template Name> \n" + "Status <Release Name> \n" + "Active Tasks <Release Name>"
+    elif command.startswith("Help"):
+        response = "You can use the following commands to intract with AWRBot : \n" + "List Templates \n" + "List Releases \n" + "Start <Template Name> \n" + "Status <Release Name> \n" + "Active Tasks <Release Name>"
+    elif command.startswith("Hello" or "Hi" or "hello"  or "hi"):
+        response = "Hello There !" + " You can type HELP to find the commands"
+    else:
+        response = "Please try Help to find the vaild commands"
+
+# Sends the response back to the channel
+
+    slack_client.api_call(
+        "chat.postMessage",
+        channel=channel,
+        text=response or default_response
+    )
+
+if __name__ == "__main__":
+
+    if slack_client.rtm_connect(with_team_state=False):
+
+        print("AutoMB is up and running!")
+        # Read bot's user ID by calling Web API method `auth.test`
+
+        awrbot_id = slack_client.api_call("auth.test")["user_id"]
+
+        while True:
+            command, channel = parse_bot_commands(slack_client.rtm_read())
+            if command:
+                handle_command(command, channel)
+            time.sleep(RTM_READ_DELAY)
+    else:
+        print("Unable to connect, please restart AWRBot!")
